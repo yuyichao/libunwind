@@ -53,8 +53,15 @@ arm_exidx_step (struct cursor *c)
                                      c->dwarf.as_arg);
   if (ret == -UNW_ENOINFO)
     {
+#ifdef UNW_LOCAL_ONLY
+        if ((ret = arm_find_proc_info2 (c->dwarf.as, ip, &c->dwarf.pi,
+                                        1, c->dwarf.as_arg,
+                                        UNW_ARM_METHOD_EXIDX)) < 0)
+        return ret;
+#else
       if ((ret = tdep_find_proc_info (&c->dwarf, ip, 1)) < 0)
         return ret;
+#endif
     }
 
   if (c->dwarf.pi.format != UNW_INFO_FORMAT_ARM_EXIDX)
@@ -94,8 +101,21 @@ unw_step (unw_cursor_t *cursor)
   if (unw_is_signal_frame (cursor) > 0)
      return arm_handle_signal_frame (cursor);
 
+  /* First, try extbl-based unwinding. */
+  if (UNW_TRY_METHOD (UNW_ARM_METHOD_EXIDX))
+    {
+      Debug (13, "%s(ret=%d), trying extbl\n",
+             UNW_TRY_METHOD(UNW_ARM_METHOD_DWARF) ? "dwarf_step() failed " : "",
+             ret);
+      ret = arm_exidx_step (c);
+      if (ret > 0)
+        return 1;
+      if (ret == 0)
+        return ret;
+    }
+
 #ifdef CONFIG_DEBUG_FRAME
-  /* First, try DWARF-based unwinding. */
+  /* Second, try DWARF-based unwinding. */
   if (UNW_TRY_METHOD(UNW_ARM_METHOD_DWARF))
     {
       ret = dwarf_step (&c->dwarf);
@@ -113,19 +133,6 @@ unw_step (unw_cursor_t *cursor)
         }
     }
 #endif /* CONFIG_DEBUG_FRAME */
-
-  /* Next, try extbl-based unwinding. */
-  if (UNW_TRY_METHOD (UNW_ARM_METHOD_EXIDX))
-    {
-      Debug (13, "%s(ret=%d), trying extbl\n",
-             UNW_TRY_METHOD(UNW_ARM_METHOD_DWARF) ? "dwarf_step() failed " : "",
-             ret);
-      ret = arm_exidx_step (c);
-      if (ret > 0)
-        return 1;
-      if (ret == -UNW_ESTOPUNWIND || ret == 0)
-        return ret;
-    }
 
   /* Fall back on APCS frame parsing.
      Note: This won't work in case the ARM EABI is used. */
